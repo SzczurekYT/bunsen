@@ -1,12 +1,24 @@
-/// Nothing much.
-pub const EXAMPLE: usize = 3;
+//!# bunsen burn(er)
+#![warn(missing_docs)]
+
+extern crate alloc;
+
+extern crate core;
+
+/// Test-only macro import.
+#[cfg(test)]
+#[allow(unused_imports)]
+#[macro_use]
+extern crate hamcrest;
+
+#[allow(dead_code)]
+pub mod compat;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[allow(dead_code)]
+pub(crate) mod testing;
 
-    #[test]
-    fn test_example() {
-        assert_eq!(EXAMPLE, 3);
-    }
-}
+pub mod layers;
+
+pub mod cache;
+pub mod utility;
