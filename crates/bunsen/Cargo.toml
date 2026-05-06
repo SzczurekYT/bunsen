@@ -12,7 +12,7 @@ description = "burn neural network extension library"
 workspace = true
 
 [dependencies]
-bimm-contracts = { workspace = true }
+bunsen-contracts = { path = "../bunsen-contracts", version = "0.0.4", features = ["std"] }
 
 # There is a dep/gate bug that requires "ndarray" when using "network".
 burn = { workspace = true, features = ["network", "ndarray"] }
@@ -25,16 +25,26 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 num-traits = { workspace = true }
 
+strum = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+spanned_error_message = { workspace = true }
+paste = { workspace = true }
+
+xot = { workspace = true }
+xee-xpath = { workspace = true }
+hashbrown = { workspace = true }
+
 [dev-dependencies]
 burn = { workspace = true, features = ["autodiff", "wgpu"] }
 hamcrest = { workspace = true }
 indoc = { workspace = true }
 criterion = { workspace = true }
 
-
 [features]
 default = []
 std = []
+wgpu = ["burn/wgpu"]
+cuda = ["burn/cuda"]
 
 [[bench]]
 name = "drop_block"
