@@ -19,12 +19,21 @@ use burn::{
         MultiGradientsParams,
         Optimizer,
         SimpleOptimizer,
-        adaptor::OptimizerAdaptor,
+        adaptor::{
+            GradAdaptor,
+            OptimizerAdaptor,
+        },
         record::AdaptorRecord,
     },
-    prelude::Backend,
+    prelude::{
+        Backend,
+        Device,
+    },
     record::Record,
-    tensor::backend::AutodiffBackend,
+    tensor::backend::{
+        AutodiffBackend,
+        BackendTypes,
+    },
 };
 use hashbrown::{
     HashMap,
@@ -33,8 +42,6 @@ use hashbrown::{
 
 use crate::training::optimizers::{
     FixedLrSelector,
-    clone_simple_optimizer,
-    compat::GradAdaptor,
     lr_selectors::LrSelector,
 };
 
@@ -84,10 +91,7 @@ where
         I: IntoIterator<Item = ParamId>,
         M: AutodiffModule<B>,
     {
-        Self::new(
-            params.into_iter().collect(),
-            clone_simple_optimizer(adaptor),
-        )
+        Self::new(params.into_iter().collect(), adaptor.optim().clone())
     }
 
     /// Get the learning rate for this group.
@@ -157,7 +161,7 @@ where
 
     fn from_item<S2: burn::record::PrecisionSettings>(
         item: Self::Item<S2>,
-        device: &<B as Backend>::Device,
+        device: &B::Device,
     ) -> Self {
         Self {
             param_map: item
@@ -199,7 +203,7 @@ fn step_group<B, O, const D: usize>(
     id: ParamId,
     tensor: Tensor<B::InnerBackend, D>,
     grad: Tensor<B::InnerBackend, D>,
-    device: &<B::InnerBackend as Backend>::Device,
+    device: &<<B as AutodiffBackend>::InnerBackend as BackendTypes>::Device,
     lr: LearningRate,
 ) -> Tensor<B::InnerBackend, D>
 where
