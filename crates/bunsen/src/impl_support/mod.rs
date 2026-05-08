@@ -5,9 +5,12 @@
 //! The API stability expectations are lower than for [`crate::layers`]
 //! or [`crate::models`]; but it is not meant to be experimental code.
 
-pub mod burn;
 pub mod probability;
 
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) mod testing;
 mod with_ok_or_panic;
+
 #[doc(inline)]
 pub use with_ok_or_panic::*;

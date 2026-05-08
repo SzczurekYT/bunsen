@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use crate::compat::ops::float_vec_linspace;
+use crate::functional::arange::float_vec_linspace;
 
 /// Computes a progressive incremental path drop rate for stochastic depth.
 ///
@@ -150,10 +150,10 @@ impl DropPathRateDepthTable {
 mod tests {
     use alloc::vec;
 
-    use hamcrest::prelude::*;
+    use hamcrest::*;
 
     use super::*;
-    use crate::testing::assert_close_to_vec;
+    use crate::impl_support::testing::assert_close_to_vec;
 
     #[test]
     fn test_incremental_drop_rate() {

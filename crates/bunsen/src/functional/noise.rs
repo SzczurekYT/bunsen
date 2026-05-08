@@ -20,7 +20,7 @@ use serde::{
 
 use crate::{
     functional::clamp::ClampConfig,
-    utility::burn::distribution::DistributionDisplayAdapter,
+    meta::distribution::DistributionDisplayAdapter,
 };
 
 /// Noise Configuration.

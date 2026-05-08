@@ -82,7 +82,7 @@ where
         }
     }
 
-    /// Build a [`OptimizerGroup`] from a [`OptimizerAdaptor`].
+    /// Build a [`OptimizerGroup`] from an [`OptimizerAdaptor`].
     pub fn from_adaptor<M, I>(
         params: I,
         adaptor: &OptimizerAdaptor<O, M, B>,

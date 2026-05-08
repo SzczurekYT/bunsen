@@ -6,29 +6,41 @@ extern crate alloc;
 
 extern crate core;
 
-/// Test-only macro import.
-#[cfg(test)]
-#[allow(unused_imports)]
-#[macro_use]
-extern crate hamcrest;
+#[cfg(feature = "train")]
+pub mod training;
 
-#[allow(dead_code)]
-pub mod compat;
+#[cfg(feature = "cache")]
+pub use bunsen_cache as cache;
 
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) mod testing;
+pub(crate) mod impl_support;
 
-pub mod burn_ext;
-pub mod cache;
 pub mod errors;
 pub mod functional;
 pub mod meta;
 pub mod modules;
 pub mod nn;
-pub mod training;
-pub mod utility;
+pub mod record;
 pub mod zspace;
 
 #[doc(inline)]
 pub use bunsen_contracts as contracts;
+
+#[cfg(test)]
+cfg_select! {
+    feature = "cuda" => {
+        /// Selected burn backend for unittests.
+        pub type BunsenTestBackend = burn::backend::Cuda;
+    }
+    feature = "metal" => {
+        /// Selected burn backend for unittests.
+        pub type BunsenTestBackend = burn::backend::Metal;
+    }
+    feature = "wgpu" => {
+        /// Selected burn backend for unittests.
+        pub type BunsenTestBackend = burn::backend::Wgpu;
+    }
+    _ => {
+        /// Selected burn backend for unittests.
+        pub type BunsenTestBackend = burn::backend::Flex;
+    }
+}
