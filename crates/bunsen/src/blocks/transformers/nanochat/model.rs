@@ -23,7 +23,6 @@ use burn::{
 };
 
 use crate::{
-    assert_shape_contract_periodically,
     blocks::transformers::{
         attention::{
             csa::{
@@ -40,13 +39,16 @@ use crate::{
             RotaryEmbeddingConfig,
             RotaryEmbeddingMeta,
         },
+        nanochat::{
+            NanoGptBlock,
+            NanoGptBlockConfig,
+            NanoGptMlpConfig,
+        },
     },
-    models::transformers::nanochat::{
-        NanoGptBlock,
-        NanoGptBlockConfig,
-        NanoGptMlpConfig,
+    contracts::{
+        assert_shape_contract_periodically,
+        unpack_shape_contract,
     },
-    unpack_shape_contract,
 };
 
 /// Common meta for [`NanoGpt`] and [`NanoGptConfig`].
@@ -405,7 +407,10 @@ mod tests {
     use burn::tensor::Distribution;
 
     use super::*;
-    use crate::contracts::assert_shape_contract;
+    use crate::{
+        contracts::assert_shape_contract,
+        support::testing::PerfTestBackend,
+    };
 
     #[test]
     fn test_gpt_config() {
@@ -422,9 +427,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "cuda")]
     fn test_gpt_forward() {
-        type B = burn::backend::Cuda;
+        type B = PerfTestBackend;
         let device = Default::default();
 
         let batch_size = 1;
