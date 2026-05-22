@@ -11,13 +11,13 @@ use std::sync::Arc;
 
 use bimm::{
     cache::DiskCacheConfig,
-    compat::type_mapper::DTypeMapper,
     models::resnet::{
         PREFAB_RESNET_MAP,
         ResNet,
     },
 };
-use bimm_firehose::{
+use bunsen::burner::module::DTypeMapper;
+use bunsen_firehose::{
     burn::{
         batcher::{
             BatcherInputAdapter,
@@ -36,7 +36,7 @@ use bimm_firehose::{
     },
     ops::init_default_operator_environment,
 };
-use bimm_firehose_image::{
+use bunsen_firehose_image::{
     ColorType,
     ImageShape,
     augmentation::{

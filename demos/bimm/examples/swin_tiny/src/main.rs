@@ -3,12 +3,19 @@ extern crate core;
 
 use std::sync::Arc;
 
-use bimm::models::swin::v2::swin_model::{
-    LayerConfig,
-    SwinTransformerV2,
-    SwinTransformerV2Config,
+use bunsen::{
+    blocks::images::drop::drop_block::{
+        DropBlock2d,
+        DropBlock2dConfig,
+        DropBlockOptions,
+    },
+    kits::imgs::swin::v2::swin_model::{
+        LayerConfig,
+        SwinTransformerV2,
+        SwinTransformerV2Config,
+    },
 };
-use bimm_firehose::{
+use bunsen_firehose::{
     burn::{
         batcher::{
             BatcherInputAdapter,
@@ -27,7 +34,7 @@ use bimm_firehose::{
     },
     ops::init_default_operator_environment,
 };
-use bimm_firehose_image::{
+use bunsen_firehose_image::{
     ColorType,
     ImageShape,
     augmentation::{
@@ -43,11 +50,6 @@ use bimm_firehose_image::{
         ImageLoader,
         ResizeSpec,
     },
-};
-use bunsen::blocks::images::drop::drop_block::{
-    DropBlock2d,
-    DropBlock2dConfig,
-    DropBlockOptions,
 };
 use burn::{
     backend::Autodiff,
