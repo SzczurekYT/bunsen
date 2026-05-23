@@ -10,12 +10,13 @@ members = [
 [workspace.package]
 edition = "2024"
 rust-version = "1.94.1"
-version = "0.21.1"
+version = "0.21.2"
 repository = "https://github.com/zspacelabs/bunsen"
 license = "MIT or Apache-2.0"
 
 [workspace.lints.rust]
 warnings = "deny"
+exported-private-dependencies = "allow"
 
 [workspace.lints.clippy]
 double_must_use = "allow"
@@ -25,6 +26,7 @@ doc_markdown = "warn"
 [workspace.dependencies]
 rand = "0.10.1"
 burn = "0.21.0"
+burn-store = "0.21.0"
 
 # Burn coupled-dependencies
 crc = "3.4.0"
