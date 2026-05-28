@@ -24,5 +24,15 @@ pub enum BunsenError {
     External(String),
 }
 
+impl BunsenError {
+    /// Map an error to an External string error.
+    pub fn external<E>(e: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        BunsenError::External(e.to_string())
+    }
+}
+
 /// Result type for bunsen operations.
 pub type BunsenResult<T> = core::result::Result<T, BunsenError>;
