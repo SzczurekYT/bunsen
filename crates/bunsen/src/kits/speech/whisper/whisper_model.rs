@@ -50,7 +50,7 @@ pub struct WhisperApiConfig {
 
 impl WhisperApiConfig {
     /// Convert to a [`WhisperStructuralConfig`].
-    pub fn to_structural_config(self) -> WhisperStructuralConfig {
+    pub fn to_structure(&self) -> WhisperStructuralConfig {
         WhisperStructuralConfig {
             encoder: AudioEncoderConfig::new(
                 self.n_mels,
@@ -72,6 +72,16 @@ impl WhisperApiConfig {
 
 /// Common meta for [`Whisper`] and [`WhisperApiConfig`].
 pub trait WhisperMeta {
+    /// Return the Mel-scale frequency resolution.
+    fn n_mels(&self) -> usize {
+        self.encoder().n_mels()
+    }
+
+    /// Return the vocabulary size.
+    fn vocab_size(&self) -> usize {
+        self.decoder().vocab_size()
+    }
+
     /// Return the embedding size of the model.
     fn d_model(&self) -> usize {
         self.encoder().d_model()
@@ -237,8 +247,10 @@ mod tests {
             n_text_layers,
         );
 
-        let structural = config.to_structural_config();
+        let structural = config.to_structure();
 
+        assert_eq!(structural.n_mels(), n_mels);
+        assert_eq!(structural.vocab_size(), vocab_size);
         assert_eq!(structural.d_model(), d_model);
         assert_eq!(structural.max_encoder_ctx(), max_audio_ctx);
         assert_eq!(structural.max_decoder_ctx(), max_text_context);
@@ -254,6 +266,8 @@ mod tests {
 
         let model: Whisper<B> = structural.init(&device);
 
+        assert_eq!(model.n_mels(), n_mels);
+        assert_eq!(model.vocab_size(), vocab_size);
         assert_eq!(model.d_model(), d_model);
         assert_eq!(model.max_encoder_ctx(), max_audio_ctx);
         assert_eq!(model.max_decoder_ctx(), max_text_context);
