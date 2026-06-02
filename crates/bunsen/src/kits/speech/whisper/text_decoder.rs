@@ -1,11 +1,10 @@
 use burn::{
     Tensor,
     config::Config,
-    module::{
-        Module,
-        Param,
-    },
+    module::Module,
     nn::{
+        Embedding,
+        EmbeddingConfig,
         LayerNorm,
         LayerNormConfig,
     },
@@ -15,9 +14,7 @@ use burn::{
     },
     tensor::{
         Bool,
-        Distribution,
         Int,
-        module::embedding,
     },
 };
 
@@ -26,17 +23,57 @@ use crate::{
     kits::speech::whisper::{
         ResidualDecoderAttentionBlock,
         ResidualDecoderAttentionBlockConfig,
+        ResidualDecoderAttentionBlockMeta,
     },
 };
+
+/// Common meta for [`TextDecoder`] and [`TextDecoderConfig`].
+pub trait TextDecoderMeta {
+    /// Return the size of the vocabulary.
+    fn n_vocab(&self) -> usize;
+
+    /// Return the max text context size.
+    fn max_text_context(&self) -> usize;
+
+    /// Return the number of text states.
+    fn n_text_state(&self) -> usize;
+}
 
 /// Config for [`TextDecoder`].
 #[derive(Config, Debug)]
 pub struct TextDecoderConfig {
-    n_vocab: usize,
-    n_text_ctx: usize,
-    n_text_state: usize,
-    n_text_head: usize,
-    n_text_layer: usize,
+    /// The size of the vocabulary.
+    pub n_vocab: usize,
+
+    /// The max text context size.
+    pub max_text_context: usize,
+
+    /// The text embedding size.
+    pub n_text_state: usize,
+
+    /// The number of decoder heads.
+    pub n_text_head: usize,
+
+    /// The number of decoder layers.
+    pub n_text_layer: usize,
+
+    /// Dropout.
+    #[config(default = "0.0")]
+    pub block_dropout: f64,
+}
+
+impl TextDecoderMeta for TextDecoderConfig {
+    fn n_vocab(&self) -> usize {
+        self.n_vocab
+    }
+
+    fn max_text_context(&self) -> usize {
+        self.max_text_context
+    }
+
+    fn n_text_state(&self) -> usize {
+        self.n_text_state
+    }
 }
 
 /// Build attention mask for decoder.
@@ -64,31 +101,21 @@ impl TextDecoderConfig {
         // TODO: Use burn::nn::Embedding
 
         TextDecoder {
-            token_embedding: Param::from_tensor(Tensor::random(
-                [self.n_vocab, self.n_text_state],
-                Distribution::Normal(0.0, 1.0),
-                device,
-            )),
+            token_embedding: EmbeddingConfig::new(self.n_vocab, self.n_text_state).init(device),
 
-            positional_embedding: Param::from_tensor(Tensor::random(
-                [self.n_text_ctx, self.n_text_state],
-                Distribution::Normal(0.0, 1.0),
-                device,
-            )),
+            positional_embedding: EmbeddingConfig::new(self.max_text_context, self.n_text_state)
+                .init(device),
 
             blocks: (0..self.n_text_layer)
                 .map(|_| {
                     ResidualDecoderAttentionBlockConfig::new(self.n_text_state, self.n_text_head)
+                        .with_dropout(self.block_dropout)
                         .init(device)
                 })
                 .collect(),
 
             ln: LayerNormConfig::new(self.n_text_state).init(device),
-
-            mask: Param::from_tensor(attn_decoder_mask(self.n_text_ctx, device)),
-
-            n_vocab: self.n_vocab,
-            n_text_ctx: self.n_text_ctx,
+            // mask: Param::from_tensor(attn_decoder_mask(self.max_text_context, device)),
         }
     }
 }
@@ -96,17 +123,43 @@ impl TextDecoderConfig {
 /// Text decoder module for Whisper speech recognition model.
 #[derive(Module, Debug)]
 pub struct TextDecoder<B: Backend> {
-    token_embedding: Param<Tensor<B, 2>>,
-    positional_embedding: Param<Tensor<B, 2>>,
-    blocks: Vec<ResidualDecoderAttentionBlock<B>>,
-    ln: LayerNorm<B>,
-    mask: Param<Tensor<B, 2>>,
-    n_vocab: usize,
-    n_text_ctx: usize,
+    /// The token embedding.
+    pub token_embedding: Embedding<B>,
+
+    /// The positional embedding.
+    pub positional_embedding: Embedding<B>,
+
+    /// The decoder blocks.
+    pub blocks: Vec<ResidualDecoderAttentionBlock<B>>,
+
+    /// The output layer norm.
+    pub ln: LayerNorm<B>,
+    // mask: Param<Tensor<B, 2>>,
+}
+
+impl<B: Backend> TextDecoderMeta for TextDecoder<B> {
+    fn n_vocab(&self) -> usize {
+        self.token_embedding.weight.val().dims()[0]
+    }
+
+    fn max_text_context(&self) -> usize {
+        self.positional_embedding.weight.val().dims()[0]
+    }
+
+    fn n_text_state(&self) -> usize {
+        self.blocks[0].n_states()
+    }
 }
 
 impl<B: Backend> TextDecoder<B> {
     /// Run the decoder.
+    ///
+    /// ## Arguments
+    /// * `x`: ``[batch, seq]``.
+    /// * `xa`: ``[batch, seq, n_audio_states]``.
+    ///
+    /// ## Returns
+    /// ``[batch, seq, n_vocab]``.
     pub fn forward(
         &self,
         x: Tensor<B, 2, Int>,
@@ -115,15 +168,16 @@ impl<B: Backend> TextDecoder<B> {
         let [_n_batch, seq_len] = x.dims();
 
         assert!(
-            seq_len <= self.n_text_ctx,
+            seq_len <= self.max_text_context(),
             "Token sequence length {} must not exceed {}.",
             seq_len,
-            self.n_text_ctx
+            self.max_text_context()
         );
 
-        let x = embedding(self.token_embedding.val(), x)
+        let x = self.token_embedding.forward(x)
             + self
                 .positional_embedding
+                .weight
                 .val()
                 .slice(s![0..seq_len])
                 .unsqueeze::<3>();
@@ -138,6 +192,15 @@ impl<B: Backend> TextDecoder<B> {
             .fold(x, |z, b| b.forward(z, xa.clone(), mask.clone()).output);
 
         let x = self.ln.forward(x);
-        x.matmul(self.token_embedding.val().transpose().unsqueeze::<3>())
+        x.matmul(
+            self.token_embedding
+                .weight
+                .val()
+                .transpose()
+                .unsqueeze::<3>(),
+        )
+
+        // denorm [batch, seq_len, n_vocab]
+        // Needs softmax / beamsearch.
     }
 }
