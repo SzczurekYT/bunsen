@@ -9,7 +9,10 @@ use burn_store::{
     PytorchStore,
 };
 
-use crate::kits::speech::whisper::blocks::WhisperApiConfig;
+use crate::kits::speech::whisper::blocks::{
+    WHISPER_DEFAULT_D_MODEL,
+    WhisperApiConfig,
+};
 
 fn block_layers_from_keys<S: AsRef<str>>(
     kind: &str,
@@ -30,8 +33,8 @@ pub struct PytorchWhisperScanner {
     #[config(default_value = "Some(\"model_state_dict\".to_string())")]
     pub top_level_key: Option<String>,
 
-    /// Head Dimension.
-    #[config(default = "64")]
+    /// Head Dimensionality.
+    #[config(defaul_value = "WHISPER_DEFAULT_D_MODEL")]
     pub d_head: usize,
 }
 
@@ -42,15 +45,24 @@ impl PytorchWhisperScanner {
     pub fn scan_cfg<P: AsRef<Path>>(
         &self,
         path: P,
-    ) -> Result<WhisperApiConfig, Box<dyn std::error::Error>> {
+    ) -> Result<(PytorchStore, WhisperApiConfig), Box<dyn std::error::Error>> {
         let path = path.as_ref();
         let path: PathBuf = path.to_path_buf();
 
-        let store = PytorchStore::from_file(path.clone());
-        let mut store = match &self.top_level_key {
+        let store = PytorchStore::from_file(path.clone())
+            .map_indices_contiguous(false)
+            .with_key_remapping(r"\.attn\.out", ".attn.output")
+            .with_key_remapping(r"\.cross_attn\.out", ".cross_attn.output")
+            .with_key_remapping(r"\.mlp\.2", ".mlp.linear2")
+            .with_key_remapping(r"\.mlp\.0", ".mlp.linear1");
+
+        let store = match &self.top_level_key {
             Some(k) => store.with_top_level_key(k),
             None => store,
         };
+
+        let mut store = store;
+
         let keys = store.keys()?;
 
         let [d_model, n_mels] = store
@@ -81,15 +93,18 @@ impl PytorchWhisperScanner {
         let encoder_layers = block_layers_from_keys("encoder", &keys);
         let decoder_layers = block_layers_from_keys("decoder", &keys);
 
-        Ok(WhisperApiConfig::new(
-            n_mels,
-            vocab_size,
-            d_model,
-            max_audio_ctx,
-            encoder_layers,
-            max_text_ctx,
-            decoder_layers,
-        )
-        .with_d_head(self.d_head))
+        Ok((
+            store,
+            WhisperApiConfig::new(
+                n_mels,
+                vocab_size,
+                d_model,
+                max_audio_ctx,
+                encoder_layers,
+                max_text_ctx,
+                decoder_layers,
+            )
+            .with_d_head(self.d_head),
+        ))
     }
 }
