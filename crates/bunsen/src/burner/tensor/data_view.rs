@@ -25,7 +25,11 @@ use crate::zspace::ravel_dims;
 /// use burn::prelude::*;
 ///
 /// let data = TensorData::from([[1.0, 2.0], [3.0, 4.0]]);
+/// let shape = data.shape.clone();
 /// let view: TensorDataIndexView<f64> = TensorDataIndexView::view(&data);
+///
+/// // Deref
+/// assert_eq!(&view.shape, &shape);
 ///
 /// assert_eq!(view[&[0, 0]], 1.0);
 /// assert_eq!(view[&[0, 1]], 2.0);
@@ -84,13 +88,20 @@ impl<'a, I: AsIndex, E: Element> Index<&[I]> for TensorDataIndexView<'a, E> {
 /// use burn::prelude::*;
 ///
 /// let mut data = TensorData::from([[1.0, 2.0], [3.0, 4.0]]);
-/// let mut view: TensorDataIndexView<f64> =
-///     TensorDataIndexView::view(&mut data);
+/// let shape = data.shape.clone();
+/// let mut view: TensorDataIndexMutView<f64> =
+///     TensorDataIndexMutView::view(&mut data);
+///
+/// // Deref
+/// assert_eq!(&view.shape, &shape);
 ///
 /// assert_eq!(view[&[0, 0]], 1.0);
 /// assert_eq!(view[&[0, 1]], 2.0);
 /// assert_eq!(view[&[1, 0]], 3.0);
 /// assert_eq!(view[&[1, 1]], 4.0);
+///
+/// view[&[0, 0]] = 10.0;
+/// assert_eq!(view[&[0, 0]], 10.0);
 /// ```
 #[derive(Debug)]
 pub struct TensorDataIndexMutView<'a, E: Element> {
