@@ -6,7 +6,7 @@
 //! ```rust,no_run
 //! use bunsen::{
 //!     burner::module::ModuleInit,
-//!     kits::bimm::swin::v2::swin_model::{
+//!     kits::bimm::swin::v2::{
 //!         LayerConfig,
 //!         SwinTransformerV2,
 //!         SwinTransformerV2Config,
@@ -37,12 +37,7 @@
 //! .init(&device);
 //! ```
 
-pub mod block_sequence;
-pub mod patch_merge;
-pub mod swin_block;
-pub mod swin_model;
-pub mod window_attention;
-pub mod windowing;
+pub mod blocks;
 
 #[doc(inline)]
-pub use swin_model::*;
+pub use blocks::swin_model::*;
