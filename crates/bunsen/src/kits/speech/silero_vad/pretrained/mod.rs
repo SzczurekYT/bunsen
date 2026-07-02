@@ -19,87 +19,66 @@ use crate::{
     },
     kits::speech::silero_vad::{
         SileroVad,
-        SileroVadConfig,
+        SileroVad16x8,
+        SileroVadSignalConfig,
     },
 };
 
-/// Load a pretrained Silero VAD model from a file.
-pub fn load_pretrained_silerovad<B: Backend, P: AsRef<Path>>(
-    path: P,
-    device: &B::Device,
-) -> BunsenResult<SileroVad<B>> {
-    let path = path.as_ref();
-    let path: PathBuf = path.to_path_buf();
+impl<B: Backend> SileroVad16x8<B> {
+    /// Load from a burnpack file.
+    pub fn load_from_burnpack<P: AsRef<Path>>(
+        path: P,
+        device: &B::Device,
+    ) -> BunsenResult<Self> {
+        let path = path.as_ref();
+        let path: PathBuf = path.to_path_buf();
 
-    let vad16: SileroVad<B> = {
-        let cfg = SileroVadConfig::standard_16khz();
+        let vad16: SileroVad<B> = {
+            let cfg = SileroVadSignalConfig::standard_16khz();
 
-        let mut store = BurnpackStore::from_file(path.clone())
-            .with_remap_pattern("conv1d37", "stft")
-            .with_remap_pattern("conv1d38", "encoder.blocks.0.conv")
-            .with_remap_pattern("conv1d39", "encoder.blocks.1.conv")
-            .with_remap_pattern("conv1d40", "encoder.blocks.2.conv")
-            .with_remap_pattern("conv1d41", "encoder.blocks.3.conv")
-            .with_remap_pattern("linear13", "input_gate")
-            .with_remap_pattern("linear14", "hidden_gate")
-            .with_remap_pattern("conv1d42", "decoder");
+            let mut store = BurnpackStore::from_file(path.clone())
+                .with_remap_pattern("conv1d37", "stft")
+                .with_remap_pattern("conv1d38", "encoder.blocks.0.conv")
+                .with_remap_pattern("conv1d39", "encoder.blocks.1.conv")
+                .with_remap_pattern("conv1d40", "encoder.blocks.2.conv")
+                .with_remap_pattern("conv1d41", "encoder.blocks.3.conv")
+                .with_remap_pattern("linear13", "lstm_hidden")
+                .with_remap_pattern("linear14", "lstm_features")
+                .with_remap_pattern("conv1d42", "decoder");
 
-        // println!("keys: {:#?}", store.keys());
+            // println!("keys: {:#?}", store.keys());
 
-        let mut module = cfg.try_init(device)?;
-        module
-            .load_from(&mut store)
-            .map_err(BunsenError::external)?;
+            let mut module = cfg.try_init(device)?;
+            module
+                .load_from(&mut store)
+                .map_err(BunsenError::external)?;
 
-        module
-    };
+            module
+        };
 
-    let _vad8: SileroVad<B> = {
-        let cfg = SileroVadConfig::standard_8khz();
+        let vad8: SileroVad<B> = {
+            let cfg = SileroVadSignalConfig::standard_8khz();
 
-        let mut store = BurnpackStore::from_file(path.clone())
-            .with_remap_pattern("conv1d43", "stft")
-            .with_remap_pattern("conv1d44", "encoder.blocks.0.conv")
-            .with_remap_pattern("conv1d45", "encoder.blocks.1.conv")
-            .with_remap_pattern("conv1d46", "encoder.blocks.2.conv")
-            .with_remap_pattern("conv1d47", "encoder.blocks.3.conv")
-            .with_remap_pattern("linear15", "input_gate")
-            .with_remap_pattern("linear16", "hidden_gate")
-            .with_remap_pattern("conv1d48", "decoder");
+            let mut store = BurnpackStore::from_file(path.clone())
+                .with_remap_pattern("conv1d43", "stft")
+                .with_remap_pattern("conv1d44", "encoder.blocks.0.conv")
+                .with_remap_pattern("conv1d45", "encoder.blocks.1.conv")
+                .with_remap_pattern("conv1d46", "encoder.blocks.2.conv")
+                .with_remap_pattern("conv1d47", "encoder.blocks.3.conv")
+                .with_remap_pattern("linear15", "lstm_hidden")
+                .with_remap_pattern("linear16", "lstm_features")
+                .with_remap_pattern("conv1d48", "decoder");
 
-        // println!("keys: {:#?}", store.keys());
+            // println!("keys: {:#?}", store.keys());
 
-        let mut module = cfg.try_init(device)?;
-        module
-            .load_from(&mut store)
-            .map_err(BunsenError::external)?;
+            let mut module = cfg.try_init(device)?;
+            module
+                .load_from(&mut store)
+                .map_err(BunsenError::external)?;
 
-        module
-    };
+            module
+        };
 
-    Ok(vad16)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::*;
-    use crate::{
-        errors::*,
-        support::testing::CpuBackend,
-    };
-
-    #[test]
-    #[ignore]
-    fn test_load_pretrained() {
-        type B = CpuBackend;
-
-        let path = PathBuf::from(
-            "/home/crutcher/git/fast-whisper-burn/src/vad/silero_vad_op18_ifless.bpk",
-        );
-        let device = Default::default();
-
-        let _vad: SileroVad<B> = load_pretrained_silerovad(path, &device).ok_or_panic();
+        Ok(SileroVad16x8 { vad16, vad8 })
     }
 }
