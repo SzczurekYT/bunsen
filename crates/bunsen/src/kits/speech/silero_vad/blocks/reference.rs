@@ -2,40 +2,19 @@
 
 use burn::{
     Tensor,
-    module::{
-        Module,
-        Param,
-        ParamId,
-    },
+    module::{Module, Param, ParamId},
     nn::{
-        Linear,
-        LinearConfig,
-        LinearLayout,
-        PaddingConfig1d,
-        conv::{
-            Conv1d,
-            Conv1dConfig,
-        },
+        Linear, LinearConfig, LinearLayout, PaddingConfig1d,
+        conv::{Conv1d, Conv1dConfig},
     },
-    prelude::{
-        Backend,
-        Int,
-        s,
-    },
+    prelude::{Backend, Int, s},
     tensor::{
         Bytes,
-        activation::{
-            relu,
-            sigmoid,
-            tanh,
-        },
+        activation::{relu, sigmoid, tanh},
         ops::PadMode,
     },
 };
-use burn_store::{
-    BurnpackStore,
-    ModuleSnapshot,
-};
+use burn_store::{BurnpackStore, ModuleSnapshot};
 
 /// Reference model for Silero VAD.
 #[derive(Module, Debug)]
@@ -246,10 +225,11 @@ impl<B: Backend> ReferenceVAD<B> {
         input: Tensor<B, 2>,
         sr: usize,
         state: Tensor<B, 3>,
-    ) -> (Tensor<B, 2>, Tensor<B, 3>) {
+        context: Tensor<B, 2>,
+    ) -> (Tensor<B, 2>, Tensor<B, 3>, Tensor<B, 2>) {
         match sr {
-            16000 => self.forward_16khz(input, state),
-            8000 => self.forward_8khz(input, state),
+            16000 => self.forward_16khz(input, state, context),
+            8000 => self.forward_8khz(input, state, context),
             _ => panic!("unsupported sample rate: {sr}"),
         }
     }
@@ -275,19 +255,19 @@ impl<B: Backend> ReferenceVAD<B> {
         input: Tensor<B, 2>,
     ) -> Tensor<B, 2> {
         let x = input.pad([(0, 0), (0, 64)], PadMode::Reflect);
-        let x: Tensor<B, 3> = x.unsqueeze_dim::<3>(1);
+        let x_3d: Tensor<B, 3> = x.unsqueeze_dim::<3>(1);
 
         let [real_2, imag_2] = self
             .conv1d37
-            .forward(x)
+            .forward(x_3d)
             .square()
             .chunk(2, 1)
             .try_into()
             .unwrap();
-        let x = (real_2 + imag_2).sqrt();
+        let mag = (real_2 + imag_2).sqrt();
 
         // Encoder
-        let x = self.conv1d38.forward(x);
+        let x = self.conv1d38.forward(mag);
         let x = relu(x);
         let x = self.conv1d39.forward(x);
         let x = relu(x);
@@ -305,11 +285,11 @@ impl<B: Backend> ReferenceVAD<B> {
         &self,
         input: Tensor<B, 2>,
         state: Tensor<B, 3>,
-    ) -> (Tensor<B, 2>, Tensor<B, 3>) {
-        let input = input.clone();
-        let state = state.clone();
-
-        let features = self.frame_features_16khz(input);
+        context: Tensor<B, 2>,
+    ) -> (Tensor<B, 2>, Tensor<B, 3>, Tensor<B, 2>) {
+        let [batch, samples] = input.dims();
+        let extended = Tensor::cat(vec![context, input.clone()], 1);
+        let features = self.frame_features_16khz(extended);
 
         let (cell, hidden) = Self::unpack_state(state);
 
@@ -325,7 +305,8 @@ impl<B: Backend> ReferenceVAD<B> {
         let cell = (forget_values * cell) + (input_values * candidate_cell_values);
         let hidden = output_values * tanh(cell.clone());
 
-        let state = Self::pack_state(cell, hidden.clone());
+        let new_state = Self::pack_state(cell, hidden.clone());
+        let new_context = input.clone().slice([0..batch, samples - 64..samples]);
 
         // output head
         let x: Tensor<B, 3> = hidden.unsqueeze_dim::<3>(2);
@@ -334,9 +315,8 @@ impl<B: Backend> ReferenceVAD<B> {
         let x = sigmoid(x);
         let x = x.squeeze_dims::<2>(&[1]);
         let x = x.mean_dim(1);
-        // let x: Tensor<B, 2> = x.squeeze_dims::<1>(&[1]).unsqueeze_dims::<2>(&[1]);
 
-        (x, state)
+        (x, new_state, new_context)
     }
 
     /// Run the module.
@@ -345,11 +325,12 @@ impl<B: Backend> ReferenceVAD<B> {
         &self,
         input: Tensor<B, 2>,
         state: Tensor<B, 3>,
-    ) -> (Tensor<B, 2>, Tensor<B, 3>) {
-        let input = input.clone();
-        let state = state.clone();
+        context: Tensor<B, 2>,
+    ) -> (Tensor<B, 2>, Tensor<B, 3>, Tensor<B, 2>) {
+        let [batch, samples] = input.dims();
+        let extended = Tensor::cat(vec![context, input.clone()], 1);
 
-        let pad8_out1 = input.pad([(0usize, 0usize), (0usize, 32usize)], PadMode::Reflect);
+        let pad8_out1 = extended.pad([(0usize, 0usize), (0usize, 32usize)], PadMode::Reflect);
         let unsqueeze36_out1: Tensor<B, 3> = pad8_out1.unsqueeze_dims::<3>(&[1]);
         let conv1d43_out1 = self.conv1d43.forward(unsqueeze36_out1);
         let slice15_out1 = conv1d43_out1.clone().slice(s![.., 0..65, ..]);
@@ -403,7 +384,8 @@ impl<B: Backend> ReferenceVAD<B> {
         let squeeze8_out1 = sigmoid32_out1.squeeze_dims::<2>(&[1]);
         let reducemean8_out1 = { squeeze8_out1.mean_dim(1usize).squeeze_dims::<1usize>(&[1]) };
         let unsqueeze40_out1: Tensor<B, 2> = reducemean8_out1.unsqueeze_dims::<2>(&[1]);
-        (unsqueeze40_out1, concat8_out1)
+        let new_context = input.clone().slice([0..batch, samples - 32..samples]);
+        (unsqueeze40_out1, concat8_out1, new_context)
     }
 }
 
@@ -413,17 +395,12 @@ mod tests {
 
     use burn::{
         Tensor,
-        tensor::{
-            Distribution,
-            Tolerance,
-            backend::BackendTypes,
-        },
+        tensor::{Distribution, Tolerance, backend::BackendTypes},
     };
 
     use super::*;
     use crate::{
-        errors::*,
-        kits::speech::silero_vad::blocks::SileroVad16x8,
+        errors::*, kits::speech::silero_vad::blocks::SileroVad16x8,
         support::testing::PerformanceBackend,
     };
 
@@ -455,6 +432,8 @@ mod tests {
 
         let batch = 2;
         let state = Tensor::zeros([2, batch, 128], &device);
+        let context_16 = Tensor::zeros([batch, 64], &device);
+        let context_8 = Tensor::zeros([batch, 32], &device);
 
         // 16khz
         {
@@ -465,8 +444,18 @@ mod tests {
                 &device,
             );
 
-            let (s_out, s_state) = s_mod.forward(input.clone(), sample_rate, state.clone());
-            let (r_out, r_state) = r_mod.forward(input.clone(), sample_rate, state.clone());
+            let (s_out, s_state, _) = s_mod.forward(
+                input.clone(),
+                sample_rate,
+                state.clone(),
+                context_16.clone(),
+            );
+            let (r_out, r_state, _) = r_mod.forward(
+                input.clone(),
+                sample_rate,
+                state.clone(),
+                context_16.clone(),
+            );
 
             s_out
                 .to_data()
@@ -487,8 +476,10 @@ mod tests {
                 &device,
             );
 
-            let (s_out, s_state) = s_mod.forward(input.clone(), sample_rate, state.clone());
-            let (r_out, r_state) = r_mod.forward(input.clone(), sample_rate, state.clone());
+            let (s_out, s_state, _) =
+                s_mod.forward(input.clone(), sample_rate, state.clone(), context_8.clone());
+            let (r_out, r_state, _) =
+                r_mod.forward(input.clone(), sample_rate, state.clone(), context_8.clone());
 
             s_out
                 .to_data()
