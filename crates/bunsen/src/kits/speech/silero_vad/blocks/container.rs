@@ -23,10 +23,11 @@ impl<B: Backend> SileroVad16x8<B> {
         input: Tensor<B, 2>,
         sr: usize,
         state: Tensor<B, 3>,
-    ) -> (Tensor<B, 2>, Tensor<B, 3>) {
+        context: Tensor<B, 2>,
+    ) -> (Tensor<B, 2>, Tensor<B, 3>, Tensor<B, 2>) {
         match sr {
-            16000 => self.vad16.forward(input, state),
-            8000 => self.vad8.forward(input, state),
+            16000 => self.vad16.forward(input, state, context),
+            8000 => self.vad8.forward(input, state, context),
             _ => panic!("unsupported sample rate: {sr}"),
         }
     }

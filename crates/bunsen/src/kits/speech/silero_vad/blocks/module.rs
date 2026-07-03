@@ -452,6 +452,15 @@ impl<B: Backend> SileroVad<B> {
         Tensor::zeros([2, batch, self.d_hidden()], device)
     }
 
+    /// Allocates a zeroed context buffer of shape `[batch, input_pad]`.
+    pub fn init_context(
+        &self,
+        batch: usize,
+        device: &B::Device,
+    ) -> Tensor<B, 2> {
+        Tensor::zeros([batch, self.input_pad], device)
+    }
+
     /// Single-step forward pass; one chunk per batch row.
     ///
     /// Each batch row is an independent stream with its own recurrent state.
@@ -462,16 +471,20 @@ impl<B: Backend> SileroVad<B> {
     ///   [`sample_rate`](SileroVadMeta::sample_rate)).
     /// * `state` - `[2, batch, hidden]` recurrent state (see
     ///   [`init_state`](Self::init_state)).
+    /// * `context` - `[batch, input_pad]` context from the previous chunk
+    ///   (zeros on first call; see [`init_context`](Self::init_context)).
     ///
     /// # Returns
     ///
-    /// `(probabilities, state)`, with `probabilities` of shape `[batch, 1]` and
-    /// the next `state` of shape `[2, batch, hidden]`.
+    /// `(probabilities, state, context)`, with `probabilities` of shape
+    /// `[batch, 1]`, `state` of shape `[2, batch, hidden]`, and
+    /// `context` of shape `[batch, input_pad]`.
     pub fn forward(
         &self,
         input: Tensor<B, 2>,
         state: Tensor<B, 3>,
-    ) -> (Tensor<B, 2>, Tensor<B, 3>) {
+        context: Tensor<B, 2>,
+    ) -> (Tensor<B, 2>, Tensor<B, 3>, Tensor<B, 2>) {
         #[cfg(any(test, debug_assertions))]
         {
             let [batch, _samples] = input.dims();
@@ -482,70 +495,64 @@ impl<B: Backend> SileroVad<B> {
             );
         }
 
-        let features = self.frame_features(input);
+        let [batch, samples] = input.dims();
+        let extended = Tensor::cat(vec![context, input.clone()], 1);
+        let features = self.frame_features(extended);
         let (cell, hidden) = Self::unpack_state(state);
         let (cell, hidden) = self.lstm_step(features, cell, hidden);
+        let new_context = input
+            .clone()
+            .slice([0..batch, samples - self.input_pad..samples]);
 
         (
             self.output_head(hidden.clone()),
             Self::pack_state(cell, hidden),
+            new_context,
         )
     }
 
     /// Streaming forward pass over a single stream's chunk-sequence.
     ///
     /// The rows of `input` are consecutive chunks of one stream; the LSTM is
-    /// run across them in order, carrying state from chunk to chunk.
+    /// run across them in order, carrying state and context from chunk to
+    /// chunk.
     ///
     /// # Arguments
     ///
     /// * `input` - `[steps, samples]` consecutive mono audio chunks.
     /// * `state` - `[2, 1, hidden]` recurrent state for the single stream.
+    /// * `context` - `[1, input_pad]` context from before the first chunk
+    ///   (zeros on first call; see [`init_context`](Self::init_context)).
     ///
     /// # Returns
     ///
-    /// `(probabilities, state)`, with `probabilities` of shape `[steps, 1]`
-    /// (one per chunk) and the next `state` of shape `[2, 1, hidden]`.
+    /// `(probabilities, state, context)`, with `probabilities` of shape
+    /// `[steps, 1]`, `state` of shape `[2, 1, hidden]`, and `context` of
+    /// shape `[1, input_pad]`.
     pub fn forward_sequence(
         &self,
         input: Tensor<B, 2>,
         state: Tensor<B, 3>,
-    ) -> (Tensor<B, 2>, Tensor<B, 3>) {
-        // One feature frame per chunk: [steps, hidden].
-        let mut seq_buf = self.frame_features(input);
-
-        cfg_select! {
-            any(test, debug_assertions) => {
-                use crate::contracts::unpack_shape_contract;
-                use crate::contracts::assert_shape_contract_periodically;
-
-                let d_hidden = self.d_hidden();
-
-                let [steps] = unpack_shape_contract!(
-                    ["steps", "d_hidden"],
-                    &seq_buf,
-                    &["steps"],
-                    &[("d_hidden", d_hidden)]
-                );
-                assert_shape_contract_periodically!(["2", "1", "d_hidden"], &state, &[("d_hidden", d_hidden)]);
-            }
-            _ => {
-                let steps = seq_buf.dims()[0];
-            }
-        }
+        context: Tensor<B, 2>,
+    ) -> (Tensor<B, 2>, Tensor<B, 3>, Tensor<B, 2>) {
+        let steps = input.dims()[0];
 
         let (mut cell, mut hidden) = Self::unpack_state(state);
-        for step in 0..steps {
-            let features = seq_buf.clone().slice_dim(0, step);
-            (cell, hidden) = self.lstm_step(features, cell, hidden);
+        let mut ctxt = context;
+        let mut outputs = Vec::with_capacity(steps);
 
-            // We expect this to be a hidden in-place update,
-            // as there are no other references to seq_buf.
-            seq_buf = seq_buf.slice_assign(s![step, ..], hidden.clone());
+        for step in 0..steps {
+            let chunk = input.clone().slice(s![step..step + 1, ..]);
+            let extended = Tensor::cat(vec![ctxt, chunk.clone()], 1);
+            let features = self.frame_features(extended);
+            (cell, hidden) = self.lstm_step(features, cell, hidden);
+            outputs.push(self.output_head(hidden.clone()));
+            let [_batch, samples] = chunk.dims();
+            ctxt = chunk.slice([0..1, samples - self.input_pad..samples]);
         }
 
-        // Batch the output head over all steps at once.
-        (self.output_head(seq_buf), Self::pack_state(cell, hidden))
+        let probs = Tensor::cat(outputs, 0);
+        (probs, Self::pack_state(cell, hidden), ctxt)
     }
 
     /// Extracts the encoder feature frame for each row of `input`.
@@ -656,9 +663,12 @@ impl<B: Backend> SileroVad<B> {
 
 #[cfg(test)]
 mod tests {
-    use burn::tensor::{
-        Distribution,
-        Tolerance,
+    use burn::{
+        prelude::s,
+        tensor::{
+            Distribution,
+            Tolerance,
+        },
     };
 
     use super::*;
@@ -774,8 +784,9 @@ mod tests {
                 &device,
             );
             let state = model.init_state(batch, &device);
+            let context = model.init_context(batch, &device);
 
-            let (prob, next_state) = model.forward(input, state);
+            let (prob, next_state, _) = model.forward(input, state, context);
 
             assert_eq!(prob.dims(), [batch, 1]);
             assert_eq!(next_state.dims(), [2, batch, 128]);
@@ -802,8 +813,9 @@ mod tests {
                 &device,
             );
             let state = model.init_state(1, &device);
+            let context = model.init_context(1, &device);
 
-            let (probs, next_state) = model.forward_sequence(input, state);
+            let (probs, next_state, _) = model.forward_sequence(input, state, context);
 
             assert_eq!(probs.dims(), [steps, 1]);
             assert_eq!(next_state.dims(), [2, 1, 128]);
@@ -826,16 +838,21 @@ mod tests {
             &device,
         );
 
-        let (seq_probs, seq_state) =
-            model.forward_sequence(input.clone(), model.init_state(1, &device));
+        let (seq_probs, seq_state, _seq_ctx) = model.forward_sequence(
+            input.clone(),
+            model.init_state(1, &device),
+            model.init_context(1, &device),
+        );
 
         // Reference: feed each chunk through the single-step forward, one stream.
         let mut state = model.init_state(1, &device);
+        let mut context = model.init_context(1, &device);
         let mut step_probs = Vec::with_capacity(steps);
         for step in 0..steps {
             let chunk = input.clone().slice(s![step..step + 1, ..]);
-            let (prob, next_state) = model.forward(chunk, state);
+            let (prob, next_state, next_context) = model.forward(chunk, state, context);
             state = next_state;
+            context = next_context;
             step_probs.push(prob);
         }
         let step_probs = Tensor::cat(step_probs, 0);
