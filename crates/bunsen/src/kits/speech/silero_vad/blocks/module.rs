@@ -34,44 +34,21 @@ use burn::{
     config::Config,
     module::Module,
     nn::{
-        Linear,
-        LinearConfig,
-        LinearLayout,
-        PaddingConfig1d,
+        Linear, LinearConfig, LinearLayout, PaddingConfig1d,
         activation::ActivationConfig,
-        conv::{
-            Conv1d,
-            Conv1dConfig,
-        },
+        conv::{Conv1d, Conv1dConfig},
     },
-    prelude::{
-        Backend,
-        Tensor,
-        s,
-    },
+    prelude::{Backend, Tensor, s},
     tensor::{
-        activation::{
-            relu,
-            sigmoid,
-            tanh,
-        },
+        activation::{relu, sigmoid, tanh},
         ops::PadMode,
     },
 };
 
 use crate::{
-    blocks::conv::{
-        ConvBlock1dConfig,
-        ConvBlock1dMeta,
-        ConvSeq1d,
-        ConvSeq1dConfig,
-        ConvSeq1dMeta,
-    },
+    blocks::conv::{ConvBlock1dConfig, ConvBlock1dMeta, ConvSeq1d, ConvSeq1dConfig, ConvSeq1dMeta},
     burner::module::ModuleInit,
-    errors::{
-        BunsenError,
-        BunsenResult,
-    },
+    errors::{BunsenError, BunsenResult},
 };
 
 /// [`SileroVad`] Signal Config.
@@ -535,24 +512,38 @@ impl<B: Backend> SileroVad<B> {
         state: Tensor<B, 3>,
         context: Tensor<B, 2>,
     ) -> (Tensor<B, 2>, Tensor<B, 3>, Tensor<B, 2>) {
-        let steps = input.dims()[0];
+        let [steps, samples] = input.dims();
+
+        // Add context - input_pad previous samples to each step
+        let previous_steps = input
+            .clone()
+            .slice(s![..(steps - 1), (samples - self.input_pad)..]);
+        let result_context = input
+            .clone()
+            .slice(s![steps - 1, (samples - self.input_pad)..]);
+        let previous_steps = Tensor::cat(vec![context.clone(), previous_steps], 0);
+        let input = Tensor::cat(vec![previous_steps, input.clone()], 1);
+
+        // One feature frame per chunk: [steps, hidden].
+        let mut seq_buf = self.frame_features(input);
 
         let (mut cell, mut hidden) = Self::unpack_state(state);
-        let mut ctxt = context;
-        let mut outputs = Vec::with_capacity(steps);
 
         for step in 0..steps {
-            let chunk = input.clone().slice(s![step..step + 1, ..]);
-            let extended = Tensor::cat(vec![ctxt, chunk.clone()], 1);
-            let features = self.frame_features(extended);
+            let features = seq_buf.clone().slice_dim(0, step);
             (cell, hidden) = self.lstm_step(features, cell, hidden);
-            outputs.push(self.output_head(hidden.clone()));
-            let [_batch, samples] = chunk.dims();
-            ctxt = chunk.slice([0..1, samples - self.input_pad..samples]);
+
+            // We expect this to be a hidden in-place update,
+            // as there are no other references to seq_buf.
+            seq_buf = seq_buf.slice_assign(s![step, ..], hidden.clone());
         }
 
-        let probs = Tensor::cat(outputs, 0);
-        (probs, Self::pack_state(cell, hidden), ctxt)
+        // Batch the output head over all steps at once.
+        (
+            self.output_head(seq_buf),
+            Self::pack_state(cell, hidden),
+            result_context,
+        )
     }
 
     /// Extracts the encoder feature frame for each row of `input`.
@@ -665,10 +656,7 @@ impl<B: Backend> SileroVad<B> {
 mod tests {
     use burn::{
         prelude::s,
-        tensor::{
-            Distribution,
-            Tolerance,
-        },
+        tensor::{Distribution, Tolerance},
     };
 
     use super::*;
@@ -786,10 +774,11 @@ mod tests {
             let state = model.init_state(batch, &device);
             let context = model.init_context(batch, &device);
 
-            let (prob, next_state, _) = model.forward(input, state, context);
+            let (prob, next_state, next_context) = model.forward(input, state, context);
 
             assert_eq!(prob.dims(), [batch, 1]);
             assert_eq!(next_state.dims(), [2, batch, 128]);
+            assert_eq!(next_context.dims(), [batch, cfg.input_pad]);
 
             // Probabilities are sigmoid outputs in [0, 1].
             let probs: Vec<f32> = prob.into_data().to_vec().unwrap();
@@ -815,10 +804,11 @@ mod tests {
             let state = model.init_state(1, &device);
             let context = model.init_context(1, &device);
 
-            let (probs, next_state, _) = model.forward_sequence(input, state, context);
+            let (probs, next_state, next_context) = model.forward_sequence(input, state, context);
 
             assert_eq!(probs.dims(), [steps, 1]);
             assert_eq!(next_state.dims(), [2, 1, 128]);
+            assert_eq!(next_context.dims(), [1, cfg.input_pad]);
         }
     }
 
@@ -838,7 +828,7 @@ mod tests {
             &device,
         );
 
-        let (seq_probs, seq_state, _seq_ctx) = model.forward_sequence(
+        let (seq_probs, seq_state, seq_ctx) = model.forward_sequence(
             input.clone(),
             model.init_state(1, &device),
             model.init_context(1, &device),
@@ -846,13 +836,13 @@ mod tests {
 
         // Reference: feed each chunk through the single-step forward, one stream.
         let mut state = model.init_state(1, &device);
-        let mut context = model.init_context(1, &device);
+        let mut ctx = model.init_context(1, &device);
         let mut step_probs = Vec::with_capacity(steps);
         for step in 0..steps {
             let chunk = input.clone().slice(s![step..step + 1, ..]);
-            let (prob, next_state, next_context) = model.forward(chunk, state, context);
+            let (prob, next_state, next_ctx) = model.forward(chunk, state, ctx);
             state = next_state;
-            context = next_context;
+            ctx = next_ctx;
             step_probs.push(prob);
         }
         let step_probs = Tensor::cat(step_probs, 0);
@@ -864,5 +854,8 @@ mod tests {
         seq_state
             .into_data()
             .assert_approx_eq::<f32>(&state.into_data(), tol);
+        seq_ctx
+            .into_data()
+            .assert_approx_eq::<f32>(&ctx.into_data(), tol);
     }
 }

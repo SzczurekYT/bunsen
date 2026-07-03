@@ -255,19 +255,19 @@ impl<B: Backend> ReferenceVAD<B> {
         input: Tensor<B, 2>,
     ) -> Tensor<B, 2> {
         let x = input.pad([(0, 0), (0, 64)], PadMode::Reflect);
-        let x_3d: Tensor<B, 3> = x.unsqueeze_dim::<3>(1);
+        let x: Tensor<B, 3> = x.unsqueeze_dim::<3>(1);
 
         let [real_2, imag_2] = self
             .conv1d37
-            .forward(x_3d)
+            .forward(x)
             .square()
             .chunk(2, 1)
             .try_into()
             .unwrap();
-        let mag = (real_2 + imag_2).sqrt();
+        let x = (real_2 + imag_2).sqrt();
 
         // Encoder
-        let x = self.conv1d38.forward(mag);
+        let x = self.conv1d38.forward(x);
         let x = relu(x);
         let x = self.conv1d39.forward(x);
         let x = relu(x);
@@ -306,7 +306,7 @@ impl<B: Backend> ReferenceVAD<B> {
         let hidden = output_values * tanh(cell.clone());
 
         let new_state = Self::pack_state(cell, hidden.clone());
-        let new_context = input.clone().slice([0..batch, samples - 64..samples]);
+        let new_context = input.clone().slice([0..batch, (samples - 64)..samples]);
 
         // output head
         let x: Tensor<B, 3> = hidden.unsqueeze_dim::<3>(2);
@@ -384,7 +384,7 @@ impl<B: Backend> ReferenceVAD<B> {
         let squeeze8_out1 = sigmoid32_out1.squeeze_dims::<2>(&[1]);
         let reducemean8_out1 = { squeeze8_out1.mean_dim(1usize).squeeze_dims::<1usize>(&[1]) };
         let unsqueeze40_out1: Tensor<B, 2> = reducemean8_out1.unsqueeze_dims::<2>(&[1]);
-        let new_context = input.clone().slice([0..batch, samples - 32..samples]);
+        let new_context = input.clone().slice([0..batch, (samples - 32)..samples]);
         (unsqueeze40_out1, concat8_out1, new_context)
     }
 }
@@ -432,8 +432,6 @@ mod tests {
 
         let batch = 2;
         let state = Tensor::zeros([2, batch, 128], &device);
-        let context_16 = Tensor::zeros([batch, 64], &device);
-        let context_8 = Tensor::zeros([batch, 32], &device);
 
         // 16khz
         {
@@ -443,19 +441,12 @@ mod tests {
                 Distribution::Default,
                 &device,
             );
+            let context = Tensor::zeros([batch, 64], &device);
 
-            let (s_out, s_state, _) = s_mod.forward(
-                input.clone(),
-                sample_rate,
-                state.clone(),
-                context_16.clone(),
-            );
-            let (r_out, r_state, _) = r_mod.forward(
-                input.clone(),
-                sample_rate,
-                state.clone(),
-                context_16.clone(),
-            );
+            let (s_out, s_state, s_ctx) =
+                s_mod.forward(input.clone(), sample_rate, state.clone(), context.clone());
+            let (r_out, r_state, r_ctx) =
+                r_mod.forward(input.clone(), sample_rate, state.clone(), context.clone());
 
             s_out
                 .to_data()
@@ -464,6 +455,10 @@ mod tests {
             s_state
                 .to_data()
                 .assert_approx_eq::<F>(&r_state.to_data(), Tolerance::default());
+
+            s_ctx
+                .to_data()
+                .assert_approx_eq::<F>(&r_ctx.to_data(), Tolerance::default());
         }
 
         // 8khz
@@ -475,11 +470,12 @@ mod tests {
                 Distribution::Default,
                 &device,
             );
+            let context = Tensor::zeros([batch, 32], &device);
 
-            let (s_out, s_state, _) =
-                s_mod.forward(input.clone(), sample_rate, state.clone(), context_8.clone());
-            let (r_out, r_state, _) =
-                r_mod.forward(input.clone(), sample_rate, state.clone(), context_8.clone());
+            let (s_out, s_state, s_ctx) =
+                s_mod.forward(input.clone(), sample_rate, state.clone(), context.clone());
+            let (r_out, r_state, r_ctx) =
+                r_mod.forward(input.clone(), sample_rate, state.clone(), context.clone());
 
             s_out
                 .to_data()
@@ -488,6 +484,10 @@ mod tests {
             s_state
                 .to_data()
                 .assert_approx_eq::<F>(&r_state.to_data(), Tolerance::default());
+
+            s_ctx
+                .to_data()
+                .assert_approx_eq::<F>(&r_ctx.to_data(), Tolerance::default());
         }
     }
 }
